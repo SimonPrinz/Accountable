@@ -6,7 +6,7 @@
 #
 
 # node.js and npm
-FROM debian:11.4-slim AS node
+FROM debian:12.8-slim AS node
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -35,7 +35,7 @@ RUN npm install \
  && npm run build
 
 # php and composer
-FROM debian:11.4-slim AS php
+FROM debian:12.8-slim AS php
 
 ENV DEBIAN_FRONTEND=noninteractive \
     COMPOSER_ALLOW_SUPERUSER=1 \
@@ -66,7 +66,7 @@ COPY . .
 RUN composer install --prefer-dist --optimize-autoloader --no-interaction
 
 # base image for everything
-FROM debian:11.4-slim AS prod
+FROM debian:12.8-slim AS prod
 
 ARG VERSION=latest
 
