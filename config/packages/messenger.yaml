@@ -1,0 +1,13 @@
+framework:
+  messenger:
+    transports:
+      async: '%env(MESSENGER_TRANSPORT_DSN)%'
+      sync: 'sync://'
+    routing:
+      '*': async
+
+when@test:
+  framework:
+    messenger:
+      routing:
+        '*': sync

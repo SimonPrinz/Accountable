@@ -1,0 +1,4 @@
+#!/command/with-contenv sh
+
+mkdir -p /run/php/
+exec /usr/sbin/php-fpm8.3 --nodaemonize

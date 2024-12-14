@@ -1,0 +1,233 @@
+name: GitHub Actions
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+permissions: write-all
+
+concurrency:
+  group: actions-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/simonprinz/accountable
+
+jobs:
+  #
+  # Code Style
+  codestyle_php_phpstan:
+    runs-on: ubuntu-latest
+    name: Check PHP Code Style (PHPStan)
+    if: github.event_name == 'pull_request' && github.ref_type == 'branch'
+    env:
+      APP_ENV: ci
+      VERSION: ci
+    steps:
+      - name: 🔄 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # use custom token to trigger workflows
+          token: ${{ secrets.GHPAT || github.token }}
+      - name: ⚙️ Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+      - name: 🗄️ Check cache for composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: vendor/
+          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+            ${{ runner.os }}-composer-
+      - name: 📦 Install composer dependencies
+        run: composer install
+      - name: 🧐 Inspecting your code
+        run: composer run phpstan
+  #
+  # Tests
+  test_php:
+    runs-on: ubuntu-latest
+    name: Test PHP
+    if: "!failure() && !cancelled() && !(github.event_name == 'release' && github.ref_type == 'tag')"
+    needs:
+      - codestyle_php_phpstan
+    services:
+      database:
+        image: mysql:8.0.32
+        options: --name database --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=10
+        env:
+          MYSQL_ROOT_PASSWORD: toor
+          MYSQL_HOST: 0.0.0.0
+        ports:
+          - 3306:3306
+    env:
+      APP_ENV: ci
+      VERSION: ci
+    steps:
+      - name: 🔄 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # use custom token to trigger workflows
+          token: ${{ secrets.GHPAT || github.token }}
+      - name: 💾 Save database ip to env
+        run: |
+          echo "DATABASE_URL=mysql://root:toor@$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' database):3306/accountable?serverVersion=8.0.13&charset=utf8mb4" >> $GITHUB_ENV
+      - name: ⚙️ Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: xdebug
+      - name: ⚙️ Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 🗄️ Check cache for composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: vendor/
+          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+            ${{ runner.os }}-composer-
+      - name: 📦 Install composer dependencies
+        run: composer install
+      - name: 🗄️ Check cache for npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+            ${{ runner.os }}-npm-
+      - name: 📦 Install npm dependencies
+        run: npm install
+      - name: 🛠️ Build encore files
+        run: npm run build
+      - name: 🆕 Create database
+        run: php bin/console --env=test -vvv doctrine:database:create
+      - name: 🪫 Prepare database
+        run: php bin/console --env=test -vvv doctrine:migrations:migrate --no-interaction
+      - name: 🔋 Generating demo data
+        run: php bin/console --env=test -vvv doctrine:fixtures:load --no-interaction
+      - name: 🧪 Run tests
+        run: php bin/phpunit -v --debug --log-junit var/php_junit.xml --coverage-clover var/php_clover.xml
+      - name: 📊 Publish test report
+        uses: mikepenz/action-junit-report@v5
+        if: success() || failure()
+        with:
+          report_paths: var/php_junit.xml
+          check_name: "PHP Test Report"
+          fail_on_failure: false
+          require_tests: true
+          detailed_summary: true
+      - name: 💬 Reporting coverage to PR
+        uses: lucassabreu/comment-coverage-clover@main
+        if: (success() || failure()) && github.ref_name != 'main'
+        with:
+          github-token: ${{ secrets.GHPAT || github.token }}
+          file: var/php_clover.xml
+  #
+  # Docker
+  docker_check-changes:
+    runs-on: ubuntu-latest
+    name: Check for Docker changes
+    if: "!failure() && !cancelled() && !(github.event_name == 'release' && github.ref_type == 'tag')"
+    needs:
+      - test_php
+    outputs:
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - name: ⤵️ Checkout
+        uses: actions/checkout@v4
+        with:
+          # use custom token to trigger workflows
+          token: ${{ secrets.GHPAT || github.token }}
+      - name: 🔎 Checking for changes
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            docker:
+              - '.docker/**'
+  docker_test-dev:
+    name: Test Dev Docker Image
+    needs:
+      - docker_check-changes
+    if: "!failure() && !cancelled() && github.event_name == 'pull_request' && github.ref_type == 'branch' && github.ref_name != 'main' && needs.docker_check-changes.outputs.docker == 'true'"
+    env:
+      VERSION: dev
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Checkout
+        uses: actions/checkout@v4
+        with:
+          # use custom token to trigger workflows
+          token: ${{ secrets.GHPAT || github.token }}
+      - name: 🔐 Login to GitHub Container Registry
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u $ --password-stdin
+      - name: 🚧 Build the Docker image
+        run: docker build . -f .docker/Dockerfile --target dev -t ${IMAGE_NAME}:${VERSION}
+  docker_test-prod:
+    name: Test Prod Docker Image
+    needs:
+      - docker_check-changes
+    if: "!failure() && !cancelled() && github.event_name == 'pull_request' && github.ref_type == 'branch' && github.ref_name != 'main' && (needs.docker_check-changes.outputs.docker == 'true')"
+    env:
+      VERSION: prod
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Checkout
+        uses: actions/checkout@v4
+        with:
+          # use custom token to trigger workflows
+          token: ${{ secrets.GHPAT || github.token }}
+      - name: 🔐 Login to GitHub Container Registry
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u $ --password-stdin
+      - name: 🚧 Build the Docker image
+        run: docker build . -f .docker/Dockerfile --target prod --build-arg="VERSION=${VERSION}" -t ${IMAGE_NAME}:${VERSION}
+  docker_build-latest:
+    name: Build Latest Docker Image
+    needs:
+      - test_php
+    if: "!failure() && !cancelled() && github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == 'main'"
+    env:
+      VERSION: "latest"
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Checkout
+        uses: actions/checkout@v4
+        with:
+          # use custom token to trigger workflows
+          token: ${{ secrets.GHPAT || github.token }}
+      - name: 🔐 Login to GitHub Container Registry
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u $ --password-stdin
+      - name: 🚧 Build the Docker image
+        run: docker build . -f .docker/Dockerfile --target prod --build-arg="VERSION=${VERSION}" -t ${IMAGE_NAME}:${VERSION}
+      - name: ⤴️ Push the Docker image to GitHub Container Registry
+        run: docker push ${IMAGE_NAME}:${VERSION}
+  docker_build-release:
+    name: Build Release Docker Image
+    needs:
+      - test_php
+    if: "!failure() && !cancelled() && github.event_name == 'release' && github.ref_type == 'tag'"
+    env:
+      VERSION: ${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: ⤵️ Checkout
+        uses: actions/checkout@v4
+        with:
+          # use custom token to trigger workflows
+          token: ${{ secrets.GHPAT || github.token }}
+      - name: 🔐 Login to GitHub Container Registry
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u $ --password-stdin
+      - name: 🚧 Build the Docker image
+        run: docker build . -f .docker/Dockerfile --target prod --build-arg="VERSION=${VERSION}" -t ${IMAGE_NAME}:${VERSION}
+      - name: ⤴️ Push the Docker image to GitHub Container Registry
+        run: docker push ${IMAGE_NAME}:${VERSION}

@@ -1,0 +1,116 @@
+x-restart-policy: &restart-policy
+  restart: unless-stopped
+x-app: &app
+  <<: *restart-policy
+  build:
+    context: .
+    dockerfile: .docker/Dockerfile
+    target: dev
+  depends_on:
+    - database
+    - cache
+    - smtp
+    - queue
+  environment:
+    PHP_IDE_CONFIG: serverName=Accountable
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  volumes:
+    - "./:/app"
+
+volumes:
+  database_data:
+  queue_data:
+  files_data:
+
+services:
+  #
+  # main app
+  app:
+    <<: *app
+    hostname: app
+    ports:
+      - "9600:80"
+  #
+  # Worker
+  worker:
+    <<: *app
+    hostname: worker
+    environment:
+      SERVICE: 'worker'
+      WORKER: 'messenger:consume async -vv --time-limit=3600'
+  #
+  # Scheduler
+  scheduler:
+    <<: *app
+    hostname: scheduler
+    environment:
+      SERVICE: 'worker'
+      WORKER: 'messenger:consume scheduler_default -vv --time-limit=3600'
+  #
+  # Database
+  database:
+    <<: *restart-policy
+    hostname: database
+    image: mysql:8.0.32
+    platform: linux/x86_64
+    ports:
+      - "9601:3306"
+    volumes:
+      - "database_data:/var/lib/mysql"
+    environment:
+      - "MYSQL_ROOT_PASSWORD=toor"
+      - "MYSQL_DATABASE=accountable"
+      - "MYSQL_USER=accountable"
+      - "MYSQL_PASSWORD=aCc0un74Bl3"
+  #
+  # Cache
+  cache:
+    <<: *restart-policy
+    image: redis:5.0.3
+    hostname: cache
+    command: redis-server /usr/local/etc/redis/redis.conf
+    volumes:
+      - "./.docker/redis.conf:/usr/local/etc/redis/redis.conf"
+  cache-ui:
+    <<: *restart-policy
+    image: redis/redisinsight:latest
+    hostname: cache-ui
+    ports:
+      - "9602:5540"
+  #
+  # SMTP Mock Server
+  smtp:
+    <<: *restart-policy
+    image: mailhog/mailhog
+    hostname: smtp
+    ports:
+      - "9603:8025"
+  #
+  # Queue
+  queue:
+    <<: *restart-policy
+    image: rabbitmq:3.12.12-management-alpine
+    hostname: queue
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes:
+      - "queue_data:/var/lib/rabbitmq/mnesia/"
+    ports:
+      - "9604:15672"
+  #
+  # S3 File Server
+  files:
+    <<: *restart-policy
+    image: quay.io/minio/minio:RELEASE.2024-01-05T22-17-24Z
+    hostname: files
+    command: "server /data --console-address :9001"
+    environment:
+      - "MINIO_ROOT_USER=root"
+      - "MINIO_ROOT_PASSWORD=toorToor"
+    volumes:
+      - "files_data:/data"
+    ports:
+      - "9605:9001"

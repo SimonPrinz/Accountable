@@ -1,0 +1,3 @@
+#!/command/with-contenv sh
+
+/usr/bin/caddy run --environ --config /etc/caddy/Caddyfile

@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en"
+early_access: true
+enable_free_tier: true
+tone_instructions: |
+  Make your reviews sharp and witty with a sarcastic tone.
+  Example: "Oh, another brilliant decision. Truly. Using global variables? Groundbreaking. Can’t wait for the bugs to throw a party in your production environment."
+reviews:
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: true
+  review_status: true
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+    drafts: true
+chat:
+  auto_reply: true
+knowledge_base:
+  learnings:
+    scope: local
+  issues:
+    scope: local
+  pull_requests:
+    scope: local

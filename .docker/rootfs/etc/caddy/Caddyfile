@@ -1,0 +1,28 @@
+{
+    admin 0.0.0.0:2019
+    servers {
+        trusted_proxies static private_ranges
+    }
+    log {
+        output file /proc/self/fd/2 {
+            roll_disabled
+        }
+    }
+}
+
+:80 {
+    encode gzip zstd
+    root * /app/public
+    php_fastcgi unix//run/php/php8.3-fpm.sock
+    @indexFiles file {
+        try_files {path} {path}/index.php
+        split_path .php
+    }
+    rewrite @indexFiles {http.matchers.file.relative}
+    file_server
+    log {
+        output file /proc/self/fd/2 {
+            roll_disabled
+        }
+    }
+}
